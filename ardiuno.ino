@@ -11,6 +11,7 @@
 // ===== PIN CONFIGURATION =====
 #define SDA_PIN 21
 #define SCL_PIN 22
+#define MOTION_PIN 27  // Update this pin to match your PIR sensor wiring
 
 // ===== DISPLAY CONFIGURATION =====
 #define SCREEN_WIDTH 128
@@ -20,34 +21,15 @@
 // ===== NETWORK CONFIGURATION =====
 const char* ssid = "Thulshan";
 const char* password = "20020407";
-const char* apiUrl = "https://57.128.230.197/api/sensor-data";  // HTTPS on port 443
-
-// TLS root CA certificate used by the HTTPS server.
-// Replace with your server CA certificate (PEM format).
-const char* rootCa =
-"-----BEGIN CERTIFICATE-----\n"
-"MIIDJDCCAgygAwIBAgIUTX15jzXESz6t8z8ZWwE96O6zey0wDQYJKoZIhvcNAQEL\n"
-"BQAwGTEXMBUGA1UEAwwONTcuMTI4LjIzMC4xOTcwHhcNMjYwNTAzMDQ0MTMyWhcN\n"
-"MjcwNTAzMDQ0MTMyWjAZMRcwFQYDVQQDDA41Ny4xMjguMjMwLjE5NzCCASIwDQYJ\n"
-"KoZIhvcNAQEBBQADggEPADCCAQoCggEBAK/qP1q0BZvw2CPhPOup+SOqujGohpcv\n"
-"PUBbSO3F0LVPklBoZbzRdAelDLLBn3/PQCcWNWudZu2joT/LnEd17PrPy63xN5qa\n"
-"fyPuSsAuVe53/bh3fURGkwLXqJlKHbjlWJ8Kjs0bFto+7XVJxqiZHN3VySfZh68n\n"
-"r5Wi/pI7KOGkvs55MiUzdAk9f/fSaBGL7iH0aSL846RFdkcjN9K20xmXW1itoewR\n"
-"OYvfldJJZvhgqqfbFctfy+NplHpHTOVK8AotJEzr9JE7n6GAeMJ+N4VQWdvn6bat\n"
-"oM2gRlVzW4eu2V2qaHdl62r4/RBbDf1ziruYzU/uP73WxQol9CBwYa8CAwEAAaNk\n"
-"MGIwHQYDVR0OBBYEFEmm1gKzdFyGgCE3VZPGAYzKTcP0MB8GA1UdIwQYMBaAFEmm\n"
-"1gKzdFyGgCE3VZPGAYzKTcP0MA8GA1UdEwEB/wQFMAMBAf8wDwYDVR0RBAgwBocE\n"
-"OYDmxTANBgkqhkiG9w0BAQsFAAOCAQEAAUj18Nj71b3IAw0a7V8acfkU5a7BHnGh\n"
-"EDMAOuI5Y2Bm9TWd4wwUVDxgudpGOEAEekEYcjd3NVEahkKZN3PxaF8iskNcZHjJ\n"
-"r6Syc8A9Bz+97dLpahchCjQEiRN2EAh+7Usz768vj6E7Jrz6HW3+6/krm6H50DDQ\n"
-"bCFeEJeMQnAC8RcKy4GzPapnxaQ8i0Zph+nmBf9W0qAi5sXF7J3RETl8ekVj+G1v\n"
-"0Ccz1CJ9iZxfMCiv4IqKGVne71siseYRVC2FAOoaklNtWxpKAasvnPg8jwUGOhiF\n"
-"sg019Q3Zd1eBAXb8l07vmEtBXYLau/cnFYGEdHOyqe+/IHRhi+8KCg==\n"
-"-----END CERTIFICATE-----\n";
+const char* apiUrl = "https://vsh.akaigen.online/api/sensor-data";
 
 // ===== SENSOR CONFIGURATION =====
 #define SEND_INTERVAL_MS 5000  // Send data every 5 seconds
 #define RECONNECT_INTERVAL_MS 30000  // Try WiFi reconnect every 30 seconds
+
+// XOR payload encoding
+const uint8_t XOR_KEY[] = {0xA1, 0xB2, 0xC3, 0xD4};
+const size_t XOR_KEY_LEN = sizeof(XOR_KEY);
 
 // ===== GLOBAL VARIABLES =====
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -62,6 +44,8 @@ bool wifiReady = false;
 
 // Forward declaration for helper used before its definition
 void displayMessage(const char* line1, const char* line2 = "", const char* line3 = "");
+String base64Encode(const uint8_t* data, size_t length);
+String xorToBase64(const String& input);
 
 void setup() {
   Serial.begin(115200);
@@ -72,6 +56,7 @@ void setup() {
 
   // ===== DISPLAY INITIALIZATION =====
   Wire.begin(SDA_PIN, SCL_PIN);
+  pinMode(MOTION_PIN, INPUT);
   
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("[ERROR] OLED display not found at address 0x3C!");
@@ -205,6 +190,7 @@ void readAndSendSensorData() {
   int aqi = ens160.getAQI();
   int tvoc = ens160.getTVOC();
   int eco2 = ens160.geteCO2();
+  bool motionDetected = digitalRead(MOTION_PIN) == HIGH;
 
   // ===== LOG SENSOR DATA =====
   Serial.println("\n===== SENSOR READING #" + String(sensorCount) + " =====");
@@ -213,13 +199,15 @@ void readAndSendSensorData() {
   Serial.print("[CO2] ");   Serial.print(eco2); Serial.println(" ppm");
   Serial.print("[TVOC] ");  Serial.print(tvoc); Serial.println(" ppb");
   Serial.print("[AQI]  ");  Serial.println(aqi);
+  Serial.print("[Motion] ");
+  Serial.println(motionDetected ? "Detected" : "None");
 
   // ===== UPDATE DISPLAY =====
   displaySensorData(temperature, hum, eco2, tvoc, aqi);
 
   // ===== SEND TO API =====
   if (wifiReady) {
-    sendToAPI(temperature, hum, eco2, tvoc, aqi);
+    sendToAPI(temperature, hum, eco2, tvoc, aqi, motionDetected);
   } else {
     Serial.println("[API] WiFi not connected - buffering data");
   }
@@ -246,11 +234,11 @@ void displaySensorData(float temp, float humidity, int co2, int tvoc, int aqi) {
   display.display();
 }
 
-void sendToAPI(float temperature, float humidity, int co2, int tvoc, int aqi) {
+void sendToAPI(float temperature, float humidity, int co2, int tvoc, int aqi, bool motionDetected) {
   WiFiClientSecure client;
   HTTPClient http;
 
-  client.setCACert(rootCa);
+  client.setInsecure();
   
   // ===== BUILD JSON PAYLOAD =====
   StaticJsonDocument<256> doc;
@@ -259,16 +247,23 @@ void sendToAPI(float temperature, float humidity, int co2, int tvoc, int aqi) {
   doc["co2"] = co2;
   doc["tvoc"] = tvoc;
   doc["aqi"] = aqi;
-  
+  doc["motion"] = motionDetected;
+
   String payload;
   serializeJson(doc, payload);
+
+  String encryptedPayload = xorToBase64(payload);
+  StaticJsonDocument<256> wrapper;
+  wrapper["xor"] = true;
+  wrapper["payload"] = encryptedPayload;
+  serializeJson(wrapper, payload);
 
   Serial.println("[API] Sending: " + payload);
   Serial.println("[API] URL: " + String(apiUrl));
 
   // ===== SEND HTTP POST REQUEST =====
   if (!http.begin(client, apiUrl)) {
-    Serial.println("[API] HTTPS begin failed. Check API URL and TLS certificate.");
+    Serial.println("[API] HTTPS begin failed. Check API URL.");
     return;
   }
   http.addHeader("Content-Type", "application/json");
@@ -293,4 +288,44 @@ void sendToAPI(float temperature, float humidity, int co2, int tvoc, int aqi) {
   }
 
   http.end();
+}
+
+String base64Encode(const uint8_t* data, size_t length) {
+  static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  String result;
+  result.reserve(((length + 2) / 3) * 4);
+
+  for (size_t i = 0; i < length; i += 3) {
+    uint32_t octet_a = i < length ? data[i] : 0;
+    uint32_t octet_b = (i + 1) < length ? data[i + 1] : 0;
+    uint32_t octet_c = (i + 2) < length ? data[i + 2] : 0;
+    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+    result += alphabet[(triple >> 18) & 0x3F];
+    result += alphabet[(triple >> 12) & 0x3F];
+    result += (i + 1) < length ? alphabet[(triple >> 6) & 0x3F] : '=';
+    result += (i + 2) < length ? alphabet[triple & 0x3F] : '=';
+  }
+
+  return result;
+}
+
+String xorToBase64(const String& input) {
+  if (XOR_KEY_LEN == 0) {
+    return "";
+  }
+
+  size_t length = input.length();
+  uint8_t* buffer = static_cast<uint8_t*>(malloc(length));
+  if (!buffer) {
+    return "";
+  }
+
+  for (size_t i = 0; i < length; ++i) {
+    buffer[i] = static_cast<uint8_t>(input[i]) ^ XOR_KEY[i % XOR_KEY_LEN];
+  }
+
+  String encoded = base64Encode(buffer, length);
+  free(buffer);
+  return encoded;
 }

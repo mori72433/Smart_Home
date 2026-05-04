@@ -54,6 +54,11 @@
           <p class="metric" id="aqiValue">--</p>
           <p class="unit">index</p>
         </article>
+        <article class="card motion-card">
+          <h2>Motion</h2>
+          <p class="metric" id="motionValue">--</p>
+          <p class="unit" id="motionDetail">Night window 7:00 PM - 6:00 AM</p>
+        </article>
       </section>
 
       <section class="panel">
@@ -63,6 +68,16 @@
         </div>
         <div class="chart-wrap">
           <canvas id="trendChart"></canvas>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Night Motion</h2>
+          <p>7:00 PM - 6:00 AM</p>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="motionChart"></canvas>
         </div>
       </section>
     </main>

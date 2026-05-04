@@ -66,9 +66,23 @@ Submit a new sensor reading from ESP32. Data is validated and stored.
   "humidity": 65.0,
   "co2": 450,
   "tvoc": 25,
-  "aqi": 1
+  "aqi": 1,
+  "motion": false
 }
 ```
+
+#### XOR Wrapper (Optional)
+
+If you want XOR-obfuscated payloads, send a wrapper JSON with base64:
+
+```json
+{
+  "xor": true,
+  "payload": "<base64 of XOR bytes>"
+}
+```
+
+The server expects the XOR key from `XOR_KEY_HEX` (see [constants.py](constants.py)).
 
 #### Validation Rules
 
@@ -79,6 +93,7 @@ Submit a new sensor reading from ESP32. Data is validated and stored.
 | co2 | int | 0 | 20000 | ppm |
 | tvoc | int | 0 | 60000 | ppb |
 | aqi | int | 0 | 5 | Index (0=Good, 5=Hazardous) |
+| motion | bool | - | - | PIR motion detected |
 
 #### Response (201 Created)
 ```json
@@ -121,7 +136,8 @@ curl -X POST https://localhost:8443/api/sensor-data \
     "humidity": 65.0,
     "co2": 450,
     "tvoc": 25,
-    "aqi": 1
+    "aqi": 1,
+    "motion": false
   }'
 ```
 
@@ -134,7 +150,8 @@ data = {
     "humidity": 65.0,
     "co2": 450,
     "tvoc": 25,
-    "aqi": 1
+  "aqi": 1,
+  "motion": False
 }
 
 response = requests.post("https://localhost:8443/api/sensor-data", json=data)
@@ -148,7 +165,8 @@ const data = {
   humidity: 65.0,
   co2: 450,
   tvoc: 25,
-  aqi: 1
+  aqi: 1,
+  motion: false
 };
 
 fetch('https://localhost:8443/api/sensor-data', {
@@ -177,6 +195,7 @@ Retrieve the most recent sensor reading.
   "co2": 450,
   "tvoc": 25,
   "aqi": 1,
+  "motion": false,
   "timestamp": "2024-04-29T15:30:45.123456Z"
 }
 ```
@@ -228,6 +247,7 @@ Retrieve paginated history of sensor readings in chronological order.
     "co2": 448,
     "tvoc": 24,
     "aqi": 1,
+    "motion": false,
     "timestamp": "2024-04-29T15:20:00.000000Z"
   },
   {
@@ -237,6 +257,7 @@ Retrieve paginated history of sensor readings in chronological order.
     "co2": 450,
     "tvoc": 25,
     "aqi": 1,
+    "motion": false,
     "timestamp": "2024-04-29T15:30:45.123456Z"
   }
 ]
@@ -272,7 +293,43 @@ for reading in readings:
 
 ---
 
-### 5. Get Statistics
+### 5. Motion Events
+
+**GET** `/api/motion-events`
+
+Retrieve motion detections from the last N hours.
+
+#### Query Parameters
+
+| Parameter | Type | Default | Min | Max | Description |
+|-----------|------|---------|-----|-----|-------------|
+| hours | int | 24 | 1 | 720 | Lookback period in hours |
+| limit | int | 100 | 1 | 1000 | Maximum events to return |
+
+#### Response (200 OK)
+```json
+[
+  {
+    "id": "507f1f77bcf86cd799439022",
+    "timestamp": "2024-04-29T21:12:07.000000Z"
+  },
+  {
+    "id": "507f1f77bcf86cd799439023",
+    "timestamp": "2024-04-29T22:45:30.000000Z"
+  }
+]
+```
+
+#### Examples
+
+**Last 24 hours:**
+```bash
+curl "https://localhost:8443/api/motion-events?hours=24&limit=1000"
+```
+
+---
+
+### 6. Get Statistics
 
 **GET** `/api/sensor-data/stats`
 
@@ -342,7 +399,8 @@ curl "https://localhost:8443/api/sensor-data/stats?hours=720"
   "humidity": 65.0,
   "co2": 450,
   "tvoc": 25,
-  "aqi": 1
+  "aqi": 1,
+  "motion": false
 }
 ```
 
@@ -355,6 +413,7 @@ curl "https://localhost:8443/api/sensor-data/stats?hours=720"
   "co2": 450,
   "tvoc": 25,
   "aqi": 1,
+  "motion": false,
   "timestamp": "2024-04-29T15:30:45.123456Z"
 }
 ```
@@ -480,7 +539,7 @@ curl https://localhost:8443/api/health
 # 2. Submit test data
 curl -X POST https://localhost:8443/api/sensor-data \
   -H "Content-Type: application/json" \
-  -d '{"temperature":23.5,"humidity":60,"co2":400,"tvoc":20,"aqi":0}'
+  -d '{"temperature":23.5,"humidity":60,"co2":400,"tvoc":20,"aqi":0,"motion":false}'
 
 # 3. Get latest
 curl https://localhost:8443/api/sensor-data/latest
@@ -512,7 +571,8 @@ def test_api():
         "humidity": 60.0,
         "co2": 450,
         "tvoc": 30,
-        "aqi": 1
+      "aqi": 1,
+      "motion": False
     }
     r = requests.post(f"{BASE_URL}/api/sensor-data", json=data)
     print("Submit:", r.json())

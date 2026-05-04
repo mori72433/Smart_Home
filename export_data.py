@@ -73,6 +73,12 @@ def export_collection(collection_name, filename, fields):
                     row.append(doc.get("tvoc"))
                 elif field == "AQI":
                     row.append(doc.get("aqi"))
+                elif field == "Motion":
+                    motion_value = doc.get("motion")
+                    if motion_value is None:
+                        row.append("")
+                    else:
+                        row.append(int(bool(motion_value)))
             writer.writerow(row)
     
     return len(docs)
@@ -83,7 +89,15 @@ print("1️⃣  Exporting all sensor data:")
 count_all = export_collection(
     MONGO_COLLECTION,
     "data/readings_all.csv",
-    ["Timestamp", "Temperature(°C)", "Humidity(%)", "CO2(ppm)", "TVOC(ppb)", "AQI"]
+    [
+        "Timestamp",
+        "Temperature(°C)",
+        "Humidity(%)",
+        "CO2(ppm)",
+        "TVOC(ppb)",
+        "AQI",
+        "Motion",
+    ]
 )
 
 print("\n2️⃣  Exporting temperature & humidity data:")

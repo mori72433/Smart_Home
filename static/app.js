@@ -7,6 +7,10 @@
 const API_BASE = window.location.origin;
 const REFRESH_INTERVAL_MS = 10000;  // Refresh every 10 seconds
 const REQUEST_TIMEOUT_MS = 5000;
+const MOTION_WINDOW_START = 19;
+const MOTION_WINDOW_END = 6;
+const MOTION_LOOKBACK_HOURS = 24;
+const MOTION_EVENT_LIMIT = 1000;
 
 // ===== DOM ELEMENTS =====
 const tempValue = document.getElementById("tempValue");
@@ -14,6 +18,9 @@ const humidityValue = document.getElementById("humidityValue");
 const co2Value = document.getElementById("co2Value");
 const tvocValue = document.getElementById("tvocValue");
 const aqiValue = document.getElementById("aqiValue");
+const motionValue = document.getElementById("motionValue");
+const motionDetail = document.getElementById("motionDetail");
+const motionCard = document.querySelector(".motion-card");
 const statusText = document.getElementById("status");
 const lastUpdated = document.getElementById("lastUpdated");
 
@@ -139,6 +146,69 @@ const trendChart = new Chart(trendCtx, {
   },
 });
 
+const motionCtx = document.getElementById("motionChart").getContext("2d");
+const motionChart = new Chart(motionCtx, {
+  type: "bar",
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: "Motion detections",
+        data: [],
+        backgroundColor: "rgba(215, 107, 45, 0.35)",
+        borderColor: "#d76b2d",
+        borderWidth: 1,
+        borderRadius: 6,
+        maxBarThickness: 28,
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        callbacks: {
+          title: (items) => items[0]?.label ?? "",
+          label: (item) => `Detections: ${item.parsed.y}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        ticks: {
+          color: "#5b6c69",
+          font: {
+            size: 11,
+          },
+        },
+        grid: {
+          color: "rgba(91, 108, 105, 0.12)",
+          drawBorder: false,
+        },
+      },
+      y: {
+        beginAtZero: true,
+        ticks: {
+          color: "#5b6c69",
+          font: {
+            size: 11,
+          },
+          precision: 0,
+          stepSize: 1,
+        },
+        grid: {
+          color: "rgba(91, 108, 105, 0.12)",
+          drawBorder: false,
+        },
+      },
+    },
+  },
+});
+
 // ===== STATE =====
 let lastDataTimestamp = null;
 let failureCount = 0;
@@ -237,6 +307,95 @@ function updateChart(readings) {
   trendChart.update("none");
 }
 
+function getNightWindow(baseDate = new Date()) {
+  const start = new Date(baseDate);
+  const end = new Date(baseDate);
+  const hour = baseDate.getHours();
+
+  if (hour >= MOTION_WINDOW_START) {
+    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
+    end.setDate(end.getDate() + 1);
+    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
+  } else if (hour < MOTION_WINDOW_END) {
+    start.setDate(start.getDate() - 1);
+    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
+    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
+  } else {
+    start.setDate(start.getDate() - 1);
+    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
+    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
+  }
+
+  return { start, end };
+}
+
+function bucketMotionEvents(events, start, end) {
+  const labels = [];
+  const counts = [];
+  let cursor = new Date(start);
+
+  while (cursor < end) {
+    labels.push(
+      cursor.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    );
+    counts.push(0);
+    cursor = new Date(cursor.getTime() + 60 * 60 * 1000);
+  }
+
+  events.forEach((event) => {
+    const timestamp = new Date(event.timestamp);
+    if (Number.isNaN(timestamp.getTime())) return;
+    const index = Math.floor((timestamp - start) / (60 * 60 * 1000));
+    if (index >= 0 && index < counts.length) {
+      counts[index] += 1;
+    }
+  });
+
+  return { labels, counts };
+}
+
+function updateMotionPanel(events = []) {
+  const { start, end } = getNightWindow();
+  const nightEvents = events.filter((event) => {
+    const timestamp = new Date(event.timestamp);
+    return timestamp >= start && timestamp < end;
+  });
+
+  if (nightEvents.length > 0) {
+    const lastEvent = nightEvents.reduce((latest, current) => {
+      if (!latest) return current;
+      return new Date(current.timestamp) > new Date(latest.timestamp)
+        ? current
+        : latest;
+    }, null);
+
+    motionValue.textContent = "Detected";
+    motionDetail.textContent = `Last: ${new Date(lastEvent.timestamp).toLocaleString()}`;
+    motionCard.classList.add("is-active");
+  } else {
+    motionValue.textContent = "No motion";
+    motionDetail.textContent = "Night window 7:00 PM - 6:00 AM";
+    motionCard.classList.remove("is-active");
+  }
+
+  const { labels, counts } = bucketMotionEvents(nightEvents, start, end);
+  motionChart.data.labels = labels;
+  motionChart.data.datasets[0].data = counts;
+  motionChart.update("none");
+}
+
+function setMotionUnavailable() {
+  motionValue.textContent = "--";
+  motionDetail.textContent = "Motion data unavailable";
+  motionCard.classList.remove("is-active");
+  motionChart.data.labels = [];
+  motionChart.data.datasets[0].data = [];
+  motionChart.update("none");
+}
+
 /**
  * Main refresh function - fetches and displays data
  */
@@ -266,7 +425,17 @@ async function refreshDashboard() {
       setStatus("Connection issue - retrying...", true);
     }
 
-    // Don't update the UI with failed data
+    return;
+  }
+
+  try {
+    const motionEvents = await fetchJson(
+      `/api/motion-events?hours=${MOTION_LOOKBACK_HOURS}&limit=${MOTION_EVENT_LIMIT}`
+    );
+    updateMotionPanel(motionEvents);
+  } catch (error) {
+    console.warn("Motion data fetch error:", error);
+    setMotionUnavailable();
   }
 }
 

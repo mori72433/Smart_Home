@@ -104,6 +104,23 @@ body {
   animation: riseIn 0.7s ease both;
 }
 
+.motion-card {
+  border-color: rgba(42, 123, 106, 0.4);
+}
+
+.motion-card .metric {
+  color: var(--accent-2);
+}
+
+.motion-card.is-active {
+  border-color: rgba(230, 57, 70, 0.6);
+  box-shadow: 0 18px 50px rgba(230, 57, 70, 0.18);
+}
+
+.motion-card.is-active .metric {
+  color: #e63946;
+}
+
 .card:nth-child(2) {
   animation-delay: 0.05s;
 }
@@ -118,6 +135,10 @@ body {
 
 .card:nth-child(5) {
   animation-delay: 0.2s;
+}
+
+.card:nth-child(6) {
+  animation-delay: 0.25s;
 }
 
 .card h2 {
@@ -152,6 +173,10 @@ body {
   border: 1px solid var(--line);
   padding: 24px;
   box-shadow: var(--shadow);
+}
+
+.panel + .panel {
+  margin-top: 24px;
 }
 
 .panel-header {

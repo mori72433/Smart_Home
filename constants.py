@@ -34,6 +34,9 @@ MAX_SENSOR_DATA_LIMIT = 1000
 DEFAULT_DATA_LIMIT = 100
 DATA_RETENTION_DAYS = 90  # Keep data for 90 days
 
+# XOR payload encoding (hex bytes, no 0x prefix)
+XOR_KEY_HEX = "A1B2C3D4"
+
 # Sensor Configuration
 SENSOR_READ_INTERVAL_MS = 5000  # 5 seconds
 SENSOR_SEND_INTERVAL_MS = 5000  # 5 seconds

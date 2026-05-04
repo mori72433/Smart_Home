@@ -1,12 +1,14 @@
 import os
+import base64
+import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pymongo import DESCENDING, MongoClient
 from pymongo.errors import ServerSelectionTimeoutError
 
@@ -29,6 +31,7 @@ try:
         AQI_MAX,
         MAX_SENSOR_DATA_LIMIT,
         DEFAULT_DATA_LIMIT,
+        XOR_KEY_HEX as DEFAULT_XOR_KEY_HEX,
     )
 except Exception:
     DEFAULT_MONGO_URI = None
@@ -41,10 +44,40 @@ except Exception:
     AQI_MIN, AQI_MAX = 0, 5
     MAX_SENSOR_DATA_LIMIT = 1000
     DEFAULT_DATA_LIMIT = 100
+    DEFAULT_XOR_KEY_HEX = "A1B2C3D4"
 
 MONGO_URI = os.getenv("MONGO_URI", DEFAULT_MONGO_URI)
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set. Set environment variable or update constants.py")
+
+XOR_KEY_HEX = os.getenv("XOR_KEY_HEX", DEFAULT_XOR_KEY_HEX)
+
+
+def parse_xor_key(hex_string: str) -> bytes:
+    cleaned = "".join(hex_string.split())
+    if len(cleaned) % 2 != 0:
+        raise ValueError("XOR key must have an even number of hex digits")
+    return bytes.fromhex(cleaned)
+
+
+def xor_decode_base64(payload_b64: str, key_bytes: bytes) -> dict:
+    if not key_bytes:
+        raise ValueError("XOR key is empty")
+
+    try:
+        encrypted = base64.b64decode(payload_b64)
+    except Exception as exc:
+        raise ValueError("Invalid base64 payload") from exc
+
+    decoded_bytes = bytearray(len(encrypted))
+    for idx, value in enumerate(encrypted):
+        decoded_bytes[idx] = value ^ key_bytes[idx % len(key_bytes)]
+
+    try:
+        decoded_text = decoded_bytes.decode("utf-8")
+        return json.loads(decoded_text)
+    except Exception as exc:
+        raise ValueError("Decoded payload is not valid JSON") from exc
 
 # ===== MONGODB SETUP =====
 try:
@@ -103,6 +136,9 @@ class SensorReading(BaseModel):
     co2: int = Field(..., ge=CO2_MIN, le=CO2_MAX, description="CO2 in ppm")
     tvoc: int = Field(..., ge=TVOC_MIN, le=TVOC_MAX, description="TVOC in ppb")
     aqi: int = Field(..., ge=AQI_MIN, le=AQI_MAX, description="Air Quality Index")
+    motion: bool | None = Field(
+        default=None, description="Motion detected by PIR sensor"
+    )
 
     class Config:
         json_schema_extra = {
@@ -112,6 +148,7 @@ class SensorReading(BaseModel):
                 "co2": 450,
                 "tvoc": 25,
                 "aqi": 1,
+                "motion": False,
             }
         }
 
@@ -129,6 +166,12 @@ class HealthStatus(BaseModel):
     timestamp: str
 
 
+class MotionEvent(BaseModel):
+    """Motion event with timestamp"""
+    id: str
+    timestamp: str
+
+
 # ===== HELPER FUNCTIONS =====
 def serialize_reading(doc):
     """Convert MongoDB document to JSON-serializable format"""
@@ -141,6 +184,7 @@ def serialize_reading(doc):
         "co2": doc.get("co2"),
         "tvoc": doc.get("tvoc"),
         "aqi": doc.get("aqi"),
+        "motion": doc.get("motion"),
         "timestamp": doc.get("timestamp").isoformat()
         if doc.get("timestamp")
         else None,
@@ -177,7 +221,7 @@ def health_check():
     tags=["Sensor Data"],
     status_code=201,
 )
-def add_sensor_data(reading: SensorReading):
+async def add_sensor_data(request: Request):
     """
     Record new sensor reading from ESP32.
     
@@ -193,6 +237,30 @@ def add_sensor_data(reading: SensorReading):
             status_code=503,
             detail="Database not available - running in offline mode",
         )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be an object")
+
+    if body.get("xor") is True:
+        payload_b64 = body.get("payload")
+        if not isinstance(payload_b64, str):
+            raise HTTPException(status_code=400, detail="Missing XOR payload")
+
+        try:
+            key_bytes = parse_xor_key(XOR_KEY_HEX)
+            body = xor_decode_base64(payload_b64, key_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        reading = SensorReading(**body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors())
 
     try:
         doc = reading.model_dump()
@@ -288,6 +356,54 @@ def list_sensor_data(
     except Exception as e:
         print(f"[API] Error fetching sensor data: {e}")
         raise HTTPException(status_code=500, detail="Error fetching data")
+
+
+@app.get(
+    "/api/motion-events",
+    response_model=list[MotionEvent],
+    tags=["Motion"],
+)
+def list_motion_events(
+    hours: int = Query(24, ge=1, le=720),
+    limit: int = Query(
+        DEFAULT_DATA_LIMIT, ge=1, le=MAX_SENSOR_DATA_LIMIT, description="Max events"
+    ),
+):
+    """Get motion events from the last N hours"""
+    if collection is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    try:
+        docs = list(
+            collection.find(
+                {"motion": True, "timestamp": {"$gte": since}}
+            )
+            .sort("timestamp", DESCENDING)
+            .limit(limit)
+        )
+
+        if not docs:
+            return []
+
+        docs.reverse()
+        results = []
+        for doc in docs:
+            timestamp = doc.get("timestamp")
+            if not timestamp:
+                continue
+            results.append(
+                {
+                    "id": str(doc.get("_id")),
+                    "timestamp": timestamp.isoformat(),
+                }
+            )
+
+        return results
+    except Exception as e:
+        print(f"[API] Error fetching motion events: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching motion data")
 
 
 @app.get("/api/sensor-data/stats", tags=["Sensor Data"])

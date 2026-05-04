@@ -50,6 +50,7 @@ A complete **IoT system** for real-time environmental monitoring using ESP32, se
 - **ENS160** - Air quality sensor (CO2, TVOC, AQI)
 - **AHT21** - Temperature & humidity sensor
 - **SSD1306** - OLED display for local monitoring
+- **PIR motion sensor** - Motion detection
 
 ### Software
 - **Arduino Code** - ESP32 sensor reading & API communication
@@ -66,6 +67,7 @@ A complete **IoT system** for real-time environmental monitoring using ESP32, se
 ✅ **Mobile Responsive** - Works on desktop and mobile
 ✅ **Statistics API** - Query aggregated data
 ✅ **OLED Display** - Local device status display
+✅ **Night Motion Tracking** - Motion detections between 7:00 PM and 6:00 AM
 
 ## Sensor Data
 
@@ -75,6 +77,7 @@ Each reading contains:
 - **CO2**: 0 to 20000 ppm
 - **TVOC**: 0 to 60000 ppb
 - **AQI**: 0-5 index
+- **Motion**: true/false (PIR sensor)
 
 ## API Endpoints
 
@@ -157,6 +160,19 @@ Response (200):
   },
   ...
 }
+```
+
+### Motion Events
+```
+GET /api/motion-events?hours=24&limit=1000
+
+Response (200):
+[
+  {
+    "id": "507f1f77bcf86cd799439022",
+    "timestamp": "2024-04-29T21:12:07.000000Z"
+  }
+]
 ```
 
 ## Setup & Installation
