@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv
+.venv
+env.bak
+venv.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+certs/server.key
+certs/server.crt
+certs/*.pem
+
+# Data exports and backups
+data/*.csv
+data/*.json
+data/*.txt
+data/exports/
+backups/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache
+*.cache
+
+# Node (if using frontend build)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Sensitive files
+constants.py  # Optional: contains credentials

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Home Air Dashboard</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Space+Grotesk:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <div class="background-glow"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Smart Home</p>
+          <h1>Air Quality Dashboard</h1>
+          <p class="subtitle">
+            Live environmental readings from your ESP32 sensors.
+          </p>
+        </div>
+        <div class="status">
+          <span id="status">Waiting for data...</span>
+          <span id="lastUpdated">--</span>
+        </div>
+      </header>
+
+      <section class="cards">
+        <article class="card">
+          <h2>Temperature</h2>
+          <p class="metric" id="tempValue">--</p>
+          <p class="unit">deg C</p>
+        </article>
+        <article class="card">
+          <h2>Humidity</h2>
+          <p class="metric" id="humidityValue">--</p>
+          <p class="unit">percent</p>
+        </article>
+        <article class="card">
+          <h2>eCO2</h2>
+          <p class="metric" id="co2Value">--</p>
+          <p class="unit">ppm</p>
+        </article>
+        <article class="card">
+          <h2>TVOC</h2>
+          <p class="metric" id="tvocValue">--</p>
+          <p class="unit">ppb</p>
+        </article>
+        <article class="card">
+          <h2>AQI</h2>
+          <p class="metric" id="aqiValue">--</p>
+          <p class="unit">index</p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Trends</h2>
+          <p>Latest 120 samples</p>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
