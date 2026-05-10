@@ -7,6 +7,14 @@
 const API_BASE = window.location.origin;
 const REFRESH_INTERVAL_MS = 10000;  // Refresh every 10 seconds
 const REQUEST_TIMEOUT_MS = 5000;
+const DATA_STALE_MS = 45000; // Mark ESP32 offline if no new data within 45s
+const TREND_REALTIME_LIMIT = 120;
+const TREND_HISTORY_LIMIT = 1000;
+const TREND_REALTIME_MINUTES = 1;
+const TREND_RANGE_DAYS = {
+  week: 7,
+  month: 30,
+};
 const MOTION_WINDOW_START = 19;
 const MOTION_WINDOW_END = 6;
 const MOTION_LOOKBACK_HOURS = 24;
@@ -23,6 +31,8 @@ const motionDetail = document.getElementById("motionDetail");
 const motionCard = document.querySelector(".motion-card");
 const statusText = document.getElementById("status");
 const lastUpdated = document.getElementById("lastUpdated");
+const trendRangeLabel = document.getElementById("trendRangeLabel");
+const trendButtons = Array.from(document.querySelectorAll(".filter-btn"));
 
 // ===== CHART SETUP =====
 const trendCtx = document.getElementById("trendChart").getContext("2d");
@@ -213,6 +223,7 @@ const motionChart = new Chart(motionCtx, {
 let lastDataTimestamp = null;
 let failureCount = 0;
 const maxFailures = 3;
+let selectedTrendRange = "realtime";
 
 // ===== UTILITY FUNCTIONS =====
 
@@ -286,6 +297,46 @@ function updateLatest(data) {
   if (data.timestamp) {
     lastUpdated.textContent = new Date(data.timestamp).toLocaleString();
     lastDataTimestamp = new Date(data.timestamp);
+  } else {
+    lastUpdated.textContent = "--";
+  }
+}
+
+function isDataFresh() {
+  if (!lastDataTimestamp) {
+    return false;
+  }
+  return Date.now() - lastDataTimestamp.getTime() <= DATA_STALE_MS;
+}
+
+function clearLatestValues() {
+  tempValue.textContent = "--";
+  humidityValue.textContent = "--";
+  co2Value.textContent = "--";
+  tvocValue.textContent = "--";
+  aqiValue.textContent = "--";
+  aqiValue.style.color = "";
+  lastUpdated.textContent = "--";
+}
+
+function clearTrendChart() {
+  trendChart.data.labels = [];
+  trendChart.data.datasets.forEach((dataset) => {
+    dataset.data = [];
+  });
+  trendChart.update("none");
+}
+
+function updateDeviceStatus() {
+  if (!lastDataTimestamp) {
+    setStatus("No data yet", true);
+    return;
+  }
+
+  if (isDataFresh()) {
+    setStatus("ESP32 Live");
+  } else {
+    setStatus("ESP32 Offline", true);
   }
 }
 
@@ -293,7 +344,10 @@ function updateLatest(data) {
  * Update chart with sensor data history
  */
 function updateChart(readings) {
-  if (!readings || readings.length === 0) return;
+  if (!readings || readings.length === 0) {
+    clearTrendChart();
+    return;
+  }
 
   const labels = readings.map((item) =>
     new Date(item.timestamp).toLocaleTimeString()
@@ -305,6 +359,57 @@ function updateChart(readings) {
   trendChart.data.datasets[2].data = readings.map((item) => item.co2);
 
   trendChart.update("none");
+}
+
+function getTrendRangeStart(range) {
+  if (range === "realtime") {
+    const start = new Date();
+    start.setMinutes(start.getMinutes() - TREND_REALTIME_MINUTES);
+    return start;
+  }
+
+  const days = TREND_RANGE_DAYS[range];
+  if (!days) {
+    return null;
+  }
+
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  return start;
+}
+
+function filterReadingsForRange(readings, range) {
+  const start = getTrendRangeStart(range);
+  if (!start) {
+    return readings;
+  }
+
+  return readings.filter((item) => new Date(item.timestamp) >= start);
+}
+
+function updateTrendRangeLabel(range, count = null) {
+  let labelText = "";
+  if (range === "week") {
+    labelText = "Last 7 days";
+  } else if (range === "month") {
+    labelText = "Last 30 days";
+  } else {
+    labelText = "Last 1 minute";
+  }
+
+  if (typeof count === "number") {
+    labelText = `${labelText} (${count})`;
+  }
+
+  trendRangeLabel.textContent = labelText;
+}
+
+function setTrendRange(range) {
+  selectedTrendRange = range;
+  trendButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.range === range);
+  });
+  updateTrendRangeLabel(range);
 }
 
 function getNightWindow(baseDate = new Date()) {
@@ -396,6 +501,12 @@ function setMotionUnavailable() {
   motionChart.update("none");
 }
 
+function setMotionOffline() {
+  motionValue.textContent = "Offline";
+  motionDetail.textContent = "ESP32 offline";
+  motionCard.classList.remove("is-active");
+}
+
 /**
  * Main refresh function - fetches and displays data
  */
@@ -403,28 +514,36 @@ async function refreshDashboard() {
   try {
     setStatus("Fetching data...");
 
+    const readingsLimit =
+      selectedTrendRange === "realtime" ? TREND_REALTIME_LIMIT : TREND_HISTORY_LIMIT;
+
     const [latest, readings] = await Promise.all([
       fetchJson("/api/sensor-data/latest"),
-      fetchJson("/api/sensor-data?limit=120"),
+      fetchJson(`/api/sensor-data?limit=${readingsLimit}`),
     ]);
 
     updateLatest(latest);
-    updateChart(readings);
-    setStatus("Live");
+    const filteredReadings = filterReadingsForRange(readings, selectedTrendRange);
+    updateChart(filteredReadings);
+    updateTrendRangeLabel(selectedTrendRange, filteredReadings.length);
+    if (!isDataFresh()) {
+      clearLatestValues();
+      setMotionOffline();
+    }
+    updateDeviceStatus();
     failureCount = 0;
   } catch (error) {
     failureCount++;
     console.error("Dashboard refresh error:", error);
 
-    if (failureCount >= maxFailures) {
-      setStatus(
-        `Connection failed (${failureCount}x) - retrying...`,
-        true
-      );
-    } else {
-      setStatus("Connection issue - retrying...", true);
-    }
+    clearLatestValues();
+    setMotionOffline();
+    setStatus("ESP32 Offline", true);
+    return;
+  }
 
+  if (!isDataFresh()) {
+    setMotionOffline();
     return;
   }
 
@@ -455,6 +574,19 @@ async function checkHealth() {
 
 async function init() {
   console.log("Initializing Smart Home Dashboard...");
+
+  trendButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const range = button.dataset.range;
+      if (!range || range === selectedTrendRange) {
+        return;
+      }
+      setTrendRange(range);
+      refreshDashboard();
+    });
+  });
+
+  setTrendRange(selectedTrendRange);
   
   // Check API health
   const isHealthy = await checkHealth();

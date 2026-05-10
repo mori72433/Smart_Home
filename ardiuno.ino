@@ -6,326 +6,311 @@
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_AHTX0.h>
 #include <ScioSense_ENS160.h>
-#include <ArduinoJson.h>
 
-// ===== PIN CONFIGURATION =====
+// ===== I2C / OLED =====
 #define SDA_PIN 21
 #define SCL_PIN 22
-#define MOTION_PIN 27  // Update this pin to match your PIR sensor wiring
-
-// ===== DISPLAY CONFIGURATION =====
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_ADDR 0x3C
 
-// ===== NETWORK CONFIGURATION =====
+// ===== WIFI =====
 const char* ssid = "Thulshan";
 const char* password = "20020407";
-const char* apiUrl = "https://vsh.akaigen.online/api/sensor-data";
 
-// ===== SENSOR CONFIGURATION =====
-#define SEND_INTERVAL_MS 5000  // Send data every 5 seconds
-#define RECONNECT_INTERVAL_MS 30000  // Try WiFi reconnect every 30 seconds
+// ===== API =====
+// Use your real domain or server IP here
+const char* apiUrl = "https://vsh.akaigen.online/api/sensor-data-xor";
 
-// XOR payload encoding
-const uint8_t XOR_KEY[] = {0xA1, 0xB2, 0xC3, 0xD4};
-const size_t XOR_KEY_LEN = sizeof(XOR_KEY);
+// ===== XOR KEY (from your config) =====
+const char* XOR_KEY_HEX = "A1B2C3D4";
 
-// ===== GLOBAL VARIABLES =====
+// ===== SEND INTERVAL =====
+const unsigned long SEND_INTERVAL_MS = 5000;
+
+// ===== OBJECTS =====
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Adafruit_AHTX0 aht;
 ScioSense_ENS160 ens160(0x53);
 
+// ===== GLOBALS =====
 unsigned long lastSendTime = 0;
-unsigned long lastReconnectTime = 0;
-uint32_t sensorCount = 0;
-bool sensorsReady = false;
-bool wifiReady = false;
+bool ahtReady = false;
+bool ensReady = false;
 
-// Forward declaration for helper used before its definition
-void displayMessage(const char* line1, const char* line2 = "", const char* line3 = "");
-String base64Encode(const uint8_t* data, size_t length);
-String xorToBase64(const String& input);
+uint8_t xorKey[32];
+size_t xorKeyLen = 0;
 
-void setup() {
-  Serial.begin(115200);
-  delay(2000);
-  
-  Serial.println("\n\n===== ESP32 Smart Home Sensor System =====");
-  Serial.println("Initializing...\n");
-
-  // ===== DISPLAY INITIALIZATION =====
-  Wire.begin(SDA_PIN, SCL_PIN);
-  pinMode(MOTION_PIN, INPUT);
-  
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("[ERROR] OLED display not found at address 0x3C!");
-    while (1) delay(100);
-  }
-  Serial.println("[OK] OLED display initialized");
-
-  displayMessage("Smart Home", "Initializing...");
-
-  // ===== AHT SENSOR INITIALIZATION =====
-  if (!aht.begin()) {
-    Serial.println("[ERROR] AHT sensor not found!");
-    displayMessage("ERROR", "AHT Sensor", "Not Found");
-    while (1) delay(100);
-  }
-  Serial.println("[OK] AHT temperature/humidity sensor initialized");
-  delay(500);
-
-  // ===== ENS160 SENSOR INITIALIZATION =====
-  if (!ens160.begin()) {
-    Serial.println("[ERROR] ENS160 sensor not found!");
-    displayMessage("ERROR", "ENS160", "Not Found");
-    while (1) delay(100);
-  }
-  Serial.println("[OK] ENS160 air quality sensor initialized");
-  
-  delay(1000);
-  
-  if (!ens160.available()) {
-    Serial.println("[ERROR] ENS160 sensor not available!");
-    displayMessage("ERROR", "ENS160", "Not Available");
-    while (1) delay(100);
-  }
-
-  ens160.setMode(ENS160_OPMODE_STD);
-  Serial.println("[OK] ENS160 operating mode set to Standard");
-  
-  sensorsReady = true;
-  delay(1000);
-
-  // ===== WiFi INITIALIZATION =====
-  connectToWiFi();
-  
-  Serial.println("\n===== System Ready =====\n");
-  displayMessage("System Ready", "Starting...");
-  delay(2000);
-
+// ---------- HEX HELPERS ----------
+int hexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
 }
 
-void loop() {
-  unsigned long now = millis();
-  
-  // ===== WiFi RECONNECTION CHECK =====
-  if (!wifiReady && (now - lastReconnectTime) >= RECONNECT_INTERVAL_MS) {
-    connectToWiFi();
-    lastReconnectTime = now;
+bool loadXorKey(const char* hexStr) {
+  xorKeyLen = 0;
+  size_t len = strlen(hexStr);
+
+  if (len % 2 != 0) return false;
+
+  for (size_t i = 0; i < len; i += 2) {
+    int hi = hexValue(hexStr[i]);
+    int lo = hexValue(hexStr[i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    xorKey[xorKeyLen++] = (uint8_t)((hi << 4) | lo);
   }
 
-  // ===== SENSOR DATA READING & TRANSMISSION =====
-  if ((now - lastSendTime) >= SEND_INTERVAL_MS) {
-    readAndSendSensorData();
-    lastSendTime = now;
-    sensorCount++;
-  }
-
-  delay(100);
+  return xorKeyLen > 0;
 }
 
-// ===== HELPER FUNCTIONS =====
-
-void connectToWiFi() {
-  Serial.println("\n[WiFi] Attempting connection...");
-  displayMessage("WiFi", "Connecting...");
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  
-  int attemptCount = 0;
-  const int maxAttempts = 20;
-  
-  while (WiFi.status() != WL_CONNECTED && attemptCount < maxAttempts) {
-    delay(500);
-    Serial.print(".");
-    attemptCount++;
-  }
-  
-  Serial.println();
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("[WiFi] Connected! IP: ");
-    Serial.println(WiFi.localIP());
-    displayMessage("WiFi", "Connected", WiFi.localIP().toString().c_str());
-    wifiReady = true;
-    delay(1500);
-  } else {
-    Serial.println("[WiFi] Connection failed. Will retry later.");
-    displayMessage("WiFi", "Failed", "Retry in 30s");
-    wifiReady = false;
-  }
+char nibbleToHex(uint8_t n) {
+  if (n < 10) return '0' + n;
+  return 'A' + (n - 10);
 }
 
-void displayMessage(const char* line1, const char* line2, const char* line3) {
+String xorEncodeToHex(const String& plainText) {
+  String out = "";
+  out.reserve(plainText.length() * 2);
+
+  for (size_t i = 0; i < plainText.length(); i++) {
+    uint8_t b = (uint8_t)plainText[i];
+    uint8_t x = b ^ xorKey[i % xorKeyLen];
+    out += nibbleToHex((x >> 4) & 0x0F);
+    out += nibbleToHex(x & 0x0F);
+  }
+  return out;
+}
+
+// ---------- OLED ----------
+void showText(String l1, String l2 = "", String l3 = "", String l4 = "", String l5 = "") {
   display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println(line1);
-  display.println(line2);
-  if (strlen(line3) > 0) {
-    display.println(line3);
-  }
+
+  display.println(l1);
+  if (l2.length()) display.println(l2);
+  if (l3.length()) display.println(l3);
+  if (l4.length()) display.println(l4);
+  if (l5.length()) display.println(l5);
+
   display.display();
 }
 
-void readAndSendSensorData() {
-  if (!sensorsReady) {
-    Serial.println("[Sensor] Sensors not ready!");
+void showData(float temp, float hum, int eco2, int tvoc, int aqi) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+
+  display.print("T: ");
+  display.print(temp, 1);
+  display.println(" C");
+
+  display.print("H: ");
+  display.print(hum, 1);
+  display.println(" %");
+
+  display.print("CO2: ");
+  display.print(eco2);
+  display.println(" ppm");
+
+  display.print("TVOC:");
+  display.print(tvoc);
+  display.println(" ppb");
+
+  display.print("AQI: ");
+  display.println(aqi);
+
+  display.display();
+}
+
+// ---------- WIFI ----------
+void connectWiFi() {
+  Serial.println("[WiFi] Connecting...");
+  showText("WiFi", "Connecting...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 20) {
+    delay(500);
+    Serial.print(".");
+    tries++;
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[WiFi] Connected");
+    Serial.print("[WiFi] IP: ");
+    Serial.println(WiFi.localIP());
+    showText("WiFi Connected", WiFi.localIP().toString());
+    delay(1500);
+  } else {
+    Serial.println("[WiFi] Failed");
+    showText("WiFi Failed");
+    delay(1500);
+  }
+}
+
+// ---------- SENSORS ----------
+void initSensors() {
+  if (aht.begin()) {
+    ahtReady = true;
+    Serial.println("[OK] AHT ready");
+  } else {
+    Serial.println("[ERROR] AHT not found");
+  }
+
+  delay(500);
+
+  ens160.begin();
+  delay(1000);
+
+  if (ens160.available()) {
+    ens160.setMode(ENS160_OPMODE_STD);
+    ensReady = true;
+    Serial.println("[OK] ENS160 ready");
+  } else {
+    Serial.println("[ERROR] ENS160 not available");
+  }
+}
+
+// ---------- API ----------
+void sendToAPI(float temp, float hum, int eco2, int tvoc, int aqi) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[API] WiFi not connected");
     return;
   }
 
-  // ===== READ TEMPERATURE & HUMIDITY =====
-  sensors_event_t humidity, temp;
-  aht.getEvent(&humidity, &temp);
-  float temperature = temp.temperature;
-  float hum = humidity.relative_humidity;
+  // Plain JSON first
+  String plainJson = "{";
+  plainJson += "\"temperature\":" + String(temp, 1) + ",";
+  plainJson += "\"humidity\":" + String(hum, 1) + ",";
+  plainJson += "\"co2\":" + String(eco2) + ",";
+  plainJson += "\"tvoc\":" + String(tvoc) + ",";
+  plainJson += "\"aqi\":" + String(aqi);
+  plainJson += "}";
 
-  // ===== READ AIR QUALITY =====
-  if (ens160.available()) {
-    ens160.measure(true);
-  }
-  int aqi = ens160.getAQI();
-  int tvoc = ens160.getTVOC();
-  int eco2 = ens160.geteCO2();
-  bool motionDetected = digitalRead(MOTION_PIN) == HIGH;
+  // XOR encode -> HEX
+  String encryptedHex = xorEncodeToHex(plainJson);
 
-  // ===== LOG SENSOR DATA =====
-  Serial.println("\n===== SENSOR READING #" + String(sensorCount) + " =====");
-  Serial.print("[Temp] ");  Serial.print(temperature, 1); Serial.println(" °C");
-  Serial.print("[Hum]  ");  Serial.print(hum, 1); Serial.println(" %");
-  Serial.print("[CO2] ");   Serial.print(eco2); Serial.println(" ppm");
-  Serial.print("[TVOC] ");  Serial.print(tvoc); Serial.println(" ppb");
-  Serial.print("[AQI]  ");  Serial.println(aqi);
-  Serial.print("[Motion] ");
-  Serial.println(motionDetected ? "Detected" : "None");
+  // Envelope JSON sent to server
+  String payload = "{";
+  payload += "\"encoding\":\"xor-hex\",";
+  payload += "\"data\":\"" + encryptedHex + "\"";
+  payload += "}";
 
-  // ===== UPDATE DISPLAY =====
-  displaySensorData(temperature, hum, eco2, tvoc, aqi);
+  Serial.println("----- TX DEBUG -----");
+  Serial.println("Plain JSON:");
+  Serial.println(plainJson);
+  Serial.println("Encrypted HEX:");
+  Serial.println(encryptedHex);
+  Serial.println("--------------------");
 
-  // ===== SEND TO API =====
-  if (wifiReady) {
-    sendToAPI(temperature, hum, eco2, tvoc, aqi, motionDetected);
-  } else {
-    Serial.println("[API] WiFi not connected - buffering data");
-  }
-}
-
-void displaySensorData(float temp, float humidity, int co2, int tvoc, int aqi) {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-
-  display.print("T: "); display.print(temp, 1); display.println("C");
-  display.print("H: "); display.print(humidity, 1); display.println("%");
-  display.print("CO2: "); display.print(co2); display.println("ppm");
-  display.print("TVOC: "); display.print(tvoc); display.println("ppb");
-  display.print("AQI: "); display.println(aqi);
-  
-  if (wifiReady) {
-    display.setCursor(0, 56);
-    display.setTextSize(1);
-    display.println("WiFi: OK");
-  }
-
-  display.display();
-}
-
-void sendToAPI(float temperature, float humidity, int co2, int tvoc, int aqi, bool motionDetected) {
   WiFiClientSecure client;
   HTTPClient http;
 
+  // For easy testing with self-signed cert
+  // For final project, better replace with setCACert(...)
   client.setInsecure();
-  
-  // ===== BUILD JSON PAYLOAD =====
-  StaticJsonDocument<256> doc;
-  doc["temperature"] = round(temperature * 10) / 10.0;
-  doc["humidity"] = round(humidity * 10) / 10.0;
-  doc["co2"] = co2;
-  doc["tvoc"] = tvoc;
-  doc["aqi"] = aqi;
-  doc["motion"] = motionDetected;
 
-  String payload;
-  serializeJson(doc, payload);
-
-  String encryptedPayload = xorToBase64(payload);
-  StaticJsonDocument<256> wrapper;
-  wrapper["xor"] = true;
-  wrapper["payload"] = encryptedPayload;
-  serializeJson(wrapper, payload);
-
-  Serial.println("[API] Sending: " + payload);
-  Serial.println("[API] URL: " + String(apiUrl));
-
-  // ===== SEND HTTP POST REQUEST =====
   if (!http.begin(client, apiUrl)) {
-    Serial.println("[API] HTTPS begin failed. Check API URL.");
+    Serial.println("[API] HTTPS begin failed");
     return;
   }
+
   http.addHeader("Content-Type", "application/json");
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
-  
-  int httpResponseCode = http.POST(payload);
 
-  if (httpResponseCode == 200 || httpResponseCode == 201) {
-    String response = http.getString();
-    Serial.print("[API] Success (200): ");
-    Serial.println(response);
-    Serial.println("[API] Data transmitted successfully\n");
-  } else if (httpResponseCode > 0) {
-    Serial.print("[API] Response Code: ");
-    Serial.println(httpResponseCode);
-    String response = http.getString();
-    Serial.println("[API] Response: " + response);
+  int code = http.POST(payload);
+
+  Serial.print("[API] Response code: ");
+  Serial.println(code);
+
+  if (code == 200 || code == 201) {
+    Serial.println("[API] Success");
+    Serial.println(http.getString());
+  } else if (code > 0) {
+    Serial.println("[API] Server response:");
+    Serial.println(http.getString());
   } else {
     Serial.print("[API] Error: ");
-    Serial.println(http.errorToString(httpResponseCode));
+    Serial.println(http.errorToString(code));
   }
 
   http.end();
 }
 
-String base64Encode(const uint8_t* data, size_t length) {
-  static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  String result;
-  result.reserve(((length + 2) / 3) * 4);
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
 
-  for (size_t i = 0; i < length; i += 3) {
-    uint32_t octet_a = i < length ? data[i] : 0;
-    uint32_t octet_b = (i + 1) < length ? data[i + 1] : 0;
-    uint32_t octet_c = (i + 2) < length ? data[i + 2] : 0;
-    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
-
-    result += alphabet[(triple >> 18) & 0x3F];
-    result += alphabet[(triple >> 12) & 0x3F];
-    result += (i + 1) < length ? alphabet[(triple >> 6) & 0x3F] : '=';
-    result += (i + 2) < length ? alphabet[triple & 0x3F] : '=';
+  if (!loadXorKey(XOR_KEY_HEX)) {
+    Serial.println("[ERROR] Invalid XOR key");
+    while (1) delay(100);
   }
 
-  return result;
+  Wire.begin(SDA_PIN, SCL_PIN);
+  delay(500);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("[ERROR] OLED not found");
+    while (1) delay(100);
+  }
+
+  showText("Smart Home", "Starting...");
+  delay(1000);
+
+  initSensors();
+
+  if (!ahtReady || !ensReady) {
+    showText("Sensor Error");
+    while (1) delay(100);
+  }
+
+  connectWiFi();
+
+  showText("System Ready");
+  delay(1500);
 }
 
-String xorToBase64(const String& input) {
-  if (XOR_KEY_LEN == 0) {
-    return "";
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
   }
 
-  size_t length = input.length();
-  uint8_t* buffer = static_cast<uint8_t*>(malloc(length));
-  if (!buffer) {
-    return "";
-  }
+  unsigned long now = millis();
+  if (now - lastSendTime >= SEND_INTERVAL_MS) {
+    lastSendTime = now;
 
-  for (size_t i = 0; i < length; ++i) {
-    buffer[i] = static_cast<uint8_t>(input[i]) ^ XOR_KEY[i % XOR_KEY_LEN];
-  }
+    sensors_event_t humidityEvent, tempEvent;
+    aht.getEvent(&humidityEvent, &tempEvent);
 
-  String encoded = base64Encode(buffer, length);
-  free(buffer);
-  return encoded;
+    float temperature = tempEvent.temperature;
+    float humidity = humidityEvent.relative_humidity;
+
+    if (ens160.available()) {
+      ens160.measure(true);
+    }
+
+    int aqi = ens160.getAQI();
+    int tvoc = ens160.getTVOC();
+    int eco2 = ens160.geteCO2();
+
+    Serial.println("----- SENSOR DATA -----");
+    Serial.print("Temp: "); Serial.println(temperature, 1);
+    Serial.print("Humidity: "); Serial.println(humidity, 1);
+    Serial.print("CO2: "); Serial.println(eco2);
+    Serial.print("TVOC: "); Serial.println(tvoc);
+    Serial.print("AQI: "); Serial.println(aqi);
+    Serial.println("-----------------------");
+
+    showData(temperature, humidity, eco2, tvoc, aqi);
+    sendToAPI(temperature, humidity, eco2, tvoc, aqi);
+  }
 }

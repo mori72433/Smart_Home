@@ -79,6 +79,26 @@ def xor_decode_base64(payload_b64: str, key_bytes: bytes) -> dict:
     except Exception as exc:
         raise ValueError("Decoded payload is not valid JSON") from exc
 
+
+def xor_decode_hex(hex_data: str, key_bytes: bytes) -> str:
+    if not key_bytes:
+        raise ValueError("XOR key is empty")
+
+    cleaned = "".join(hex_data.split())
+    if len(cleaned) % 2 != 0:
+        raise ValueError("Hex payload must have an even number of digits")
+
+    try:
+        raw = bytes.fromhex(cleaned)
+    except ValueError as exc:
+        raise ValueError("Invalid hex payload") from exc
+
+    decoded_bytes = bytes(b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(raw))
+    try:
+        return decoded_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Decoded payload is not valid UTF-8") from exc
+
 # ===== MONGODB SETUP =====
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
@@ -157,6 +177,12 @@ class SensorReadingResponse(SensorReading):
     """Response model with ID and timestamp"""
     id: str = Field(..., description="MongoDB document ID")
     timestamp: str = Field(..., description="ISO format timestamp")
+
+
+class XorPayload(BaseModel):
+    """XOR-encoded payload wrapper"""
+    encoding: str
+    data: str
 
 
 class HealthStatus(BaseModel):
@@ -300,6 +326,79 @@ async def add_sensor_data(request: Request):
     except Exception as e:
         print(f"[API] Error saving sensor data: {e}")
         raise HTTPException(status_code=500, detail="Error saving sensor data")
+
+
+@app.post(
+    "/api/sensor-data-xor",
+    response_model=dict,
+    tags=["Sensor Data"],
+    status_code=201,
+)
+def add_sensor_data_xor(payload: XorPayload):
+    """Record XOR-hex encoded sensor reading from ESP32."""
+    if collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database not available - running in offline mode",
+        )
+
+    if payload.encoding.lower() != "xor-hex":
+        raise HTTPException(status_code=400, detail="Unsupported encoding")
+
+    try:
+        key_bytes = parse_xor_key(XOR_KEY_HEX)
+        decoded_json = xor_decode_hex(payload.data, key_bytes)
+        print(f"[API] Encrypted HEX: {payload.data}")
+        print(f"[API] Decoded JSON: {decoded_json}")
+        data = json.loads(decoded_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Decoded payload is not valid JSON")
+
+    try:
+        reading = SensorReading(**data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors())
+
+    try:
+        doc = reading.model_dump()
+        doc["timestamp"] = datetime.now(timezone.utc)
+
+        result_full = collection.insert_one(doc)
+
+        doc_temp = {
+            "temperature": doc["temperature"],
+            "humidity": doc["humidity"],
+            "timestamp": doc["timestamp"],
+        }
+        collection_temp.insert_one(doc_temp)
+
+        doc_aqi = {
+            "co2": doc["co2"],
+            "tvoc": doc["tvoc"],
+            "aqi": doc["aqi"],
+            "timestamp": doc["timestamp"],
+        }
+        collection_aqi.insert_one(doc_aqi)
+
+        print(
+            f"[API] XOR sensor data recorded (ID: {result_full.inserted_id}): "
+            f"T={reading.temperature}°C, H={reading.humidity}%, "
+            f"CO2={reading.co2}ppm, TVOC={reading.tvoc}ppb, AQI={reading.aqi}"
+        )
+
+        return {
+            "status": "ok",
+            "id": str(result_full.inserted_id),
+            "timestamp": doc["timestamp"].isoformat(),
+        }
+    except Exception as e:
+        print(f"[API] Error saving XOR sensor data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Error decoding or saving sensor data",
+        )
 
 
 @app.get(

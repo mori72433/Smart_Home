@@ -64,7 +64,20 @@
       <section class="panel">
         <div class="panel-header">
           <h2>Trends</h2>
-          <p>Latest 120 samples</p>
+          <div class="trend-controls">
+            <p id="trendRangeLabel">Latest 120 samples</p>
+            <div class="filter-group" role="group" aria-label="Trend range">
+              <button class="filter-btn is-active" type="button" data-range="realtime">
+                Real time
+              </button>
+              <button class="filter-btn" type="button" data-range="week">
+                1 week
+              </button>
+              <button class="filter-btn" type="button" data-range="month">
+                1 month
+              </button>
+            </div>
+          </div>
         </div>
         <div class="chart-wrap">
           <canvas id="trendChart"></canvas>
