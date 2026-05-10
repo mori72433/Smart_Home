@@ -15,8 +15,6 @@ const TREND_RANGE_DAYS = {
   week: 7,
   month: 30,
 };
-const MOTION_WINDOW_START = 19;
-const MOTION_WINDOW_END = 6;
 const MOTION_LOOKBACK_HOURS = 24;
 const MOTION_EVENT_LIMIT = 1000;
 
@@ -435,28 +433,6 @@ function setTrendRange(range) {
   updateTrendRangeLabel(range);
 }
 
-function getNightWindow(baseDate = new Date()) {
-  const start = new Date(baseDate);
-  const end = new Date(baseDate);
-  const hour = baseDate.getHours();
-
-  if (hour >= MOTION_WINDOW_START) {
-    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
-    end.setDate(end.getDate() + 1);
-    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
-  } else if (hour < MOTION_WINDOW_END) {
-    start.setDate(start.getDate() - 1);
-    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
-    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
-  } else {
-    start.setDate(start.getDate() - 1);
-    start.setHours(MOTION_WINDOW_START, 0, 0, 0);
-    end.setHours(MOTION_WINDOW_END, 0, 0, 0);
-  }
-
-  return { start, end };
-}
-
 function bucketMotionEvents(events, start, end) {
   const labels = [];
   const counts = [];
@@ -486,14 +462,15 @@ function bucketMotionEvents(events, start, end) {
 }
 
 function updateMotionPanel(events = []) {
-  const { start, end } = getNightWindow();
-  const nightEvents = events.filter((event) => {
+  const end = new Date();
+  const start = new Date(end.getTime() - MOTION_LOOKBACK_HOURS * 60 * 60 * 1000);
+  const recentEvents = events.filter((event) => {
     const timestamp = parseApiDate(event.timestamp);
-    return timestamp ? timestamp >= start && timestamp < end : false;
+    return timestamp ? timestamp >= start && timestamp <= end : false;
   });
 
-  if (nightEvents.length > 0) {
-    const lastEvent = nightEvents.reduce((latest, current) => {
+  if (recentEvents.length > 0) {
+    const lastEvent = recentEvents.reduce((latest, current) => {
       if (!latest) return current;
       const currentTime = parseApiDate(current.timestamp);
       const latestTime = parseApiDate(latest.timestamp);
@@ -510,11 +487,11 @@ function updateMotionPanel(events = []) {
     motionCard.classList.add("is-active");
   } else {
     motionValue.textContent = "No motion";
-    motionDetail.textContent = "Night window 7:00 PM - 6:00 AM";
+    motionDetail.textContent = `No motion in last ${MOTION_LOOKBACK_HOURS} hours`;
     motionCard.classList.remove("is-active");
   }
 
-  const { labels, counts } = bucketMotionEvents(nightEvents, start, end);
+  const { labels, counts } = bucketMotionEvents(recentEvents, start, end);
   motionChart.data.labels = labels;
   motionChart.data.datasets[0].data = counts;
   motionChart.update("none");

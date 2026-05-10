@@ -13,9 +13,10 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_ADDR 0x3C
+#define MOTION_PIN 27
 
 // ===== WIFI =====
-const char* ssid = "Thulshan";
+const char* ssid = "VIRANGA";
 const char* password = "20020407";
 
 // ===== API =====
@@ -27,6 +28,7 @@ const char* XOR_KEY_HEX = "A1B2C3D4";
 
 // ===== SEND INTERVAL =====
 const unsigned long SEND_INTERVAL_MS = 20000;
+const unsigned long MOTION_HOLD_MS = 3600000;
 
 // ===== OBJECTS =====
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -37,6 +39,7 @@ ScioSense_ENS160 ens160(0x53);
 unsigned long lastSendTime = 0;
 bool ahtReady = false;
 bool ensReady = false;
+unsigned long motionActiveUntil = 0;
 
 uint8_t xorKey[32];
 size_t xorKeyLen = 0;
@@ -180,7 +183,7 @@ void initSensors() {
 }
 
 // ---------- API ----------
-void sendToAPI(float temp, float hum, int eco2, int tvoc, int aqi) {
+void sendToAPI(float temp, float hum, int eco2, int tvoc, int aqi, bool motion) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[API] WiFi not connected");
     return;
@@ -192,7 +195,9 @@ void sendToAPI(float temp, float hum, int eco2, int tvoc, int aqi) {
   plainJson += "\"humidity\":" + String(hum, 1) + ",";
   plainJson += "\"co2\":" + String(eco2) + ",";
   plainJson += "\"tvoc\":" + String(tvoc) + ",";
-  plainJson += "\"aqi\":" + String(aqi);
+  plainJson += "\"aqi\":" + String(aqi) + ",";
+  plainJson += "\"motion\":";
+  plainJson += (motion ? "true" : "false");
   plainJson += "}";
 
   // XOR encode -> HEX
@@ -256,6 +261,7 @@ void setup() {
   }
 
   Wire.begin(SDA_PIN, SCL_PIN);
+  pinMode(MOTION_PIN, INPUT);
   delay(500);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
@@ -285,6 +291,11 @@ void loop() {
   }
 
   unsigned long now = millis();
+  bool motionDetected = digitalRead(MOTION_PIN) == HIGH;
+  if (motionDetected) {
+    motionActiveUntil = now + MOTION_HOLD_MS;
+  }
+  bool motionActive = motionDetected || (MOTION_HOLD_MS > 0 && (long)(motionActiveUntil - now) > 0);
   if (now - lastSendTime >= SEND_INTERVAL_MS) {
     lastSendTime = now;
 
@@ -308,9 +319,10 @@ void loop() {
     Serial.print("CO2: "); Serial.println(eco2);
     Serial.print("TVOC: "); Serial.println(tvoc);
     Serial.print("AQI: "); Serial.println(aqi);
+    Serial.print("Motion: "); Serial.println(motionActive ? "Detected" : "None");
     Serial.println("-----------------------");
 
     showData(temperature, humidity, eco2, tvoc, aqi);
-    sendToAPI(temperature, humidity, eco2, tvoc, aqi);
+    sendToAPI(temperature, humidity, eco2, tvoc, aqi, motionActive);
   }
 }
