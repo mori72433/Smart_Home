@@ -243,6 +243,17 @@ function formatNumber(value, digits) {
   return value.toFixed(digits);
 }
 
+function parseApiDate(timestamp) {
+  if (!timestamp) return null;
+  if (timestamp instanceof Date) return timestamp;
+  if (typeof timestamp !== "string") return new Date(timestamp);
+
+  const normalized = /Z$|[+-]\d{2}:\d{2}$/.test(timestamp)
+    ? timestamp
+    : `${timestamp}Z`;
+  return new Date(normalized);
+}
+
 /**
  * Fetch with timeout
  */
@@ -295,8 +306,13 @@ function updateLatest(data) {
   aqiValue.title = aqiLabels[Math.min(aqiLevel, 5)];
 
   if (data.timestamp) {
-    lastUpdated.textContent = new Date(data.timestamp).toLocaleString();
-    lastDataTimestamp = new Date(data.timestamp);
+    lastDataTimestamp = parseApiDate(data.timestamp);
+    if (lastDataTimestamp && !Number.isNaN(lastDataTimestamp.getTime())) {
+      lastUpdated.textContent = lastDataTimestamp.toLocaleString();
+    } else {
+      lastDataTimestamp = null;
+      lastUpdated.textContent = "--";
+    }
   } else {
     lastUpdated.textContent = "--";
   }
