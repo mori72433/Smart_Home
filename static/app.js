@@ -248,10 +248,15 @@ function parseApiDate(timestamp) {
   if (timestamp instanceof Date) return timestamp;
   if (typeof timestamp !== "string") return new Date(timestamp);
 
-  const normalized = /Z$|[+-]\d{2}:\d{2}$/.test(timestamp)
-    ? timestamp
-    : `${timestamp}Z`;
-  return new Date(normalized);
+  let normalized = timestamp.trim();
+
+  normalized = normalized.replace(/(\.\d{3})\d+/, "$1");
+  if (!/Z$|[+-]\d{2}:\d{2}$/.test(normalized)) {
+    normalized = `${normalized}Z`;
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**
@@ -307,10 +312,9 @@ function updateLatest(data) {
 
   if (data.timestamp) {
     lastDataTimestamp = parseApiDate(data.timestamp);
-    if (lastDataTimestamp && !Number.isNaN(lastDataTimestamp.getTime())) {
+    if (lastDataTimestamp) {
       lastUpdated.textContent = lastDataTimestamp.toLocaleString();
     } else {
-      lastDataTimestamp = null;
       lastUpdated.textContent = "--";
     }
   } else {
@@ -366,7 +370,7 @@ function updateChart(readings) {
   }
 
   const labels = readings.map((item) =>
-    new Date(item.timestamp).toLocaleTimeString()
+    (parseApiDate(item.timestamp) ?? new Date(NaN)).toLocaleTimeString()
   );
 
   trendChart.data.labels = labels;
@@ -400,7 +404,10 @@ function filterReadingsForRange(readings, range) {
     return readings;
   }
 
-  return readings.filter((item) => new Date(item.timestamp) >= start);
+  return readings.filter((item) => {
+    const timestamp = parseApiDate(item.timestamp);
+    return timestamp ? timestamp >= start : false;
+  });
 }
 
 function updateTrendRangeLabel(range, count = null) {
@@ -467,8 +474,8 @@ function bucketMotionEvents(events, start, end) {
   }
 
   events.forEach((event) => {
-    const timestamp = new Date(event.timestamp);
-    if (Number.isNaN(timestamp.getTime())) return;
+    const timestamp = parseApiDate(event.timestamp);
+    if (!timestamp) return;
     const index = Math.floor((timestamp - start) / (60 * 60 * 1000));
     if (index >= 0 && index < counts.length) {
       counts[index] += 1;
@@ -481,20 +488,25 @@ function bucketMotionEvents(events, start, end) {
 function updateMotionPanel(events = []) {
   const { start, end } = getNightWindow();
   const nightEvents = events.filter((event) => {
-    const timestamp = new Date(event.timestamp);
-    return timestamp >= start && timestamp < end;
+    const timestamp = parseApiDate(event.timestamp);
+    return timestamp ? timestamp >= start && timestamp < end : false;
   });
 
   if (nightEvents.length > 0) {
     const lastEvent = nightEvents.reduce((latest, current) => {
       if (!latest) return current;
-      return new Date(current.timestamp) > new Date(latest.timestamp)
-        ? current
-        : latest;
+      const currentTime = parseApiDate(current.timestamp);
+      const latestTime = parseApiDate(latest.timestamp);
+      if (!currentTime) return latest;
+      if (!latestTime) return current;
+      return currentTime > latestTime ? current : latest;
     }, null);
 
+    const lastTimestamp = lastEvent ? parseApiDate(lastEvent.timestamp) : null;
     motionValue.textContent = "Detected";
-    motionDetail.textContent = `Last: ${new Date(lastEvent.timestamp).toLocaleString()}`;
+    motionDetail.textContent = lastTimestamp
+      ? `Last: ${lastTimestamp.toLocaleString()}`
+      : "Last: --";
     motionCard.classList.add("is-active");
   } else {
     motionValue.textContent = "No motion";
