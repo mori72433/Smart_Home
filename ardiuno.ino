@@ -26,7 +26,7 @@ const char* apiUrl = "https://vsh.akaigen.online/api/sensor-data-xor";
 const char* XOR_KEY_HEX = "A1B2C3D4";
 
 // ===== SEND INTERVAL =====
-const unsigned long SEND_INTERVAL_MS = 5000;
+const unsigned long SEND_INTERVAL_MS = 20000;
 
 // ===== OBJECTS =====
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
